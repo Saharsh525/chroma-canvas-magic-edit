@@ -2,27 +2,31 @@
 import { useState, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Upload, Download, Loader2, ArrowLeft } from 'lucide-react';
+import { Progress } from '@/components/ui/progress';
+import { Upload, Download, Loader2, ArrowLeft, Scissors } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
+import { removeBackground, loadImage } from '@/utils/backgroundRemoval';
 
 export default function BackgroundRemover() {
-  const [originalImage, setOriginalImage] = useState<string | null>(null);
-  const [processedImage, setProcessedImage] = useState<string | null>(null);
+  const [originalImage, setOriginalImage] = useState(null);
+  const [processedImage, setProcessedImage] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [progress, setProgress] = useState(0);
+  const fileInputRef = useRef(null);
   const navigate = useNavigate();
 
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (event) => {
     const file = event.target.files?.[0];
     if (file && file.type.startsWith('image/')) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        setOriginalImage(e.target?.result as string);
+      try {
+        const imageUrl = URL.createObjectURL(file);
+        setOriginalImage(imageUrl);
         setProcessedImage(null);
-      };
-      reader.readAsDataURL(file);
+        setProgress(0);
+      } catch (error) {
+        toast.error('Failed to load image');
+      }
     } else {
       toast.error('Please select a valid image file');
     }
@@ -32,48 +36,25 @@ export default function BackgroundRemover() {
     if (!originalImage) return;
 
     setIsProcessing(true);
+    setProgress(0);
+    
     try {
-      // Simple background removal using canvas manipulation
-      // In a real implementation, you would use a proper AI model
-      const img = new Image();
-      img.onload = () => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-
-        canvas.width = img.width;
-        canvas.height = img.height;
-        
-        ctx.drawImage(img, 0, 0);
-        
-        // Simple edge detection and background removal simulation
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const data = imageData.data;
-        
-        // Basic color-based background removal (replace with actual AI model)
-        for (let i = 0; i < data.length; i += 4) {
-          const r = data[i];
-          const g = data[i + 1];
-          const b = data[i + 2];
-          
-          // Simple background detection (adjust threshold as needed)
-          const brightness = (r + g + b) / 3;
-          if (brightness > 200 || (Math.abs(r - g) < 30 && Math.abs(g - b) < 30)) {
-            data[i + 3] = 0; // Make transparent
-          }
-        }
-        
-        ctx.putImageData(imageData, 0, 0);
-        setProcessedImage(canvas.toDataURL('image/png'));
-        setIsProcessing(false);
-        toast.success('Background removed successfully!');
-      };
-      img.src = originalImage;
+      // Load the image
+      const imageFile = await fetch(originalImage).then(r => r.blob());
+      const imageElement = await loadImage(imageFile);
+      
+      // Process with AI background removal
+      const resultBlob = await removeBackground(imageElement, setProgress);
+      
+      // Create URL for the processed image
+      const processedUrl = URL.createObjectURL(resultBlob);
+      setProcessedImage(processedUrl);
+      
+      toast.success('Background removed successfully!');
     } catch (error) {
       console.error('Error processing image:', error);
-      toast.error('Failed to process image');
+      toast.error('Failed to remove background. Please try again.');
+    } finally {
       setIsProcessing(false);
     }
   };
@@ -99,16 +80,19 @@ export default function BackgroundRemover() {
           <ArrowLeft size={16} className="mr-2" />
           Back to Tools
         </Button>
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">Background Remover</h1>
+        <h1 className="text-3xl font-bold text-gray-900 mb-2">AI Background Remover</h1>
         <p className="text-gray-600">Remove backgrounds from your images with AI precision</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card>
           <CardHeader>
-            <CardTitle>Upload Image</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <Scissors className="w-5 h-5" />
+              Upload Image
+            </CardTitle>
             <CardDescription>
-              Select an image to remove its background
+              Select an image to remove its background using AI
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -131,11 +115,13 @@ export default function BackgroundRemover() {
               
               {originalImage && (
                 <div className="space-y-4">
-                  <img
-                    src={originalImage}
-                    alt="Original"
-                    className="w-full h-64 object-contain border rounded-lg"
-                  />
+                  <div className="border rounded-lg overflow-hidden">
+                    <img
+                      src={originalImage}
+                      alt="Original"
+                      className="w-full h-64 object-contain bg-gray-50"
+                    />
+                  </div>
                   <Button
                     onClick={processImage}
                     disabled={isProcessing}
@@ -147,9 +133,24 @@ export default function BackgroundRemover() {
                         Processing...
                       </>
                     ) : (
-                      'Remove Background'
+                      <>
+                        <Scissors size={16} className="mr-2" />
+                        Remove Background
+                      </>
                     )}
                   </Button>
+                  
+                  {isProcessing && (
+                    <div className="space-y-2">
+                      <Progress value={progress} className="w-full" />
+                      <p className="text-sm text-gray-600 text-center">
+                        {progress < 30 ? 'Loading AI model...' :
+                         progress < 50 ? 'Preparing image...' :
+                         progress < 80 ? 'Analyzing image...' :
+                         'Applying background removal...'}
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -160,37 +161,53 @@ export default function BackgroundRemover() {
           <CardHeader>
             <CardTitle>Result</CardTitle>
             <CardDescription>
-              Your image with background removed
+              Your image with background removed (transparent PNG)
             </CardDescription>
           </CardHeader>
           <CardContent>
             {processedImage ? (
               <div className="space-y-4">
-                <div className="bg-gray-100 p-4 rounded-lg">
+                <div className="border rounded-lg overflow-hidden bg-gray-50 bg-opacity-50" 
+                     style={{backgroundImage: 'url("data:image/svg+xml,%3csvg width=\'20\' height=\'20\' xmlns=\'http://www.w3.org/2000/svg\'%3e%3crect width=\'10\' height=\'10\' fill=\'%23f0f0f0\'/%3e%3crect x=\'10\' y=\'10\' width=\'10\' height=\'10\' fill=\'%23f0f0f0\'/%3e%3c/svg%3e")'}}>
                   <img
                     src={processedImage}
-                    alt="Processed"
+                    alt="Background Removed"
                     className="w-full h-64 object-contain"
                   />
+                </div>
+                <div className="bg-green-50 p-3 rounded-lg">
+                  <p className="text-sm text-green-800">
+                    ✨ Background successfully removed! The image now has a transparent background.
+                  </p>
                 </div>
                 <Button
                   onClick={downloadImage}
                   className="w-full"
                 >
                   <Download size={16} className="mr-2" />
-                  Download PNG
+                  Download PNG with Transparency
                 </Button>
               </div>
             ) : (
-              <div className="text-center text-gray-500 py-8">
-                Upload and process an image to see the result
+              <div className="text-center text-gray-500 py-8 border-2 border-dashed border-gray-300 rounded-lg">
+                <Scissors className="w-12 h-12 mx-auto mb-4 text-gray-400" />
+                <p>Upload and process an image to see the result</p>
               </div>
             )}
           </CardContent>
         </Card>
       </div>
 
-      <canvas ref={canvasRef} className="hidden" />
+      <div className="mt-8 bg-blue-50 p-6 rounded-lg">
+        <h3 className="font-semibold text-blue-900 mb-2">✨ AI Background Removal Features:</h3>
+        <ul className="text-sm text-blue-800 space-y-1">
+          <li>• Advanced AI segmentation for precise background detection</li>
+          <li>• Maintains fine details like hair and fur edges</li>
+          <li>• Outputs transparent PNG files ready for use</li>
+          <li>• Works with portraits, objects, and complex scenes</li>
+          <li>• Optimized for both desktop and mobile browsers</li>
+        </ul>
+      </div>
     </div>
   );
 }
